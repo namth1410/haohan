@@ -1,0 +1,54 @@
+# Haohan - MinIO Browser Docker Compose
+# Dùng cho phát triển local với docker
+
+services:
+  haohan:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: haohan
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - MINIO_ENDPOINT=minio
+      - MINIO_PORT=9000
+      - MINIO_USE_SSL=false
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET_NAME=haohan
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - haohan-network
+
+  minio:
+    image: minio/minio:latest
+    container_name: haohan-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - haohan-network
+
+volumes:
+  minio-data:
+
+networks:
+  haohan-network:
+    driver: bridge

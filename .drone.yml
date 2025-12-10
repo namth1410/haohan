@@ -1,0 +1,75 @@
+kind: pipeline
+type: kubernetes
+name: build-push-and-update-infra
+
+clone:
+  depth: 1
+
+trigger:
+  branch:
+    - main
+  event:
+    - push
+
+steps:
+  # === BƯỚC 1: BUILD VÀ PUSH IMAGE LÊN DOCKER HUB (KANIKO) ===
+  - name: build-and-push-to-dockerhub
+    image: gcr.io/kaniko-project/executor:v1.23.2-debug
+    environment:
+      DOCKERHUB_USERNAME:
+        from_secret: dockerhub_username
+      DOCKERHUB_PASSWORD:
+        from_secret: dockerhub_password
+      IMAGE_REPO:
+        from_secret: haohan_image_repo
+    commands:
+      # Tạo Docker config để authenticate với Docker Hub
+      - mkdir -p /kaniko/.docker
+      - |
+        echo "{\"auths\":{\"https://index.docker.io/v1/\":{\"username\":\"$DOCKERHUB_USERNAME\",\"password\":\"$DOCKERHUB_PASSWORD\"}}}" > /kaniko/.docker/config.json
+      # Build và push image bằng Kaniko
+      - /kaniko/executor
+        --context=/drone/src
+        --dockerfile=/drone/src/Dockerfile
+        --destination=$IMAGE_REPO:1.0.0-${DRONE_COMMIT_SHA:0:7}
+        --cache=true
+
+  # === BƯỚC 2: CẬP NHẬT IMAGE TAG TRONG REPO INFRA ===
+  - name: deploy
+    image: line/kubectl-kustomize:1.31.0-5.7.1
+    environment:
+      REPO_URL:
+        from_secret: repo_url
+      IMAGE_REPO:
+        from_secret: haohan_image_repo
+      OVERLAY_PATH:
+        from_secret: haohan_overlay_path
+    commands:
+      # 0. Cài thêm git vì image này không có sẵn
+      - apk add --no-cache git
+
+      # 1. Cấu hình thông tin người commit
+      - git config --global user.name "namth1410"
+      - git config --global user.email "tranhainam1410@gmail.com"
+
+      # 2. Clone repo infra sử dụng token
+      - git clone $REPO_URL
+
+      # 3. Di chuyển vào đúng thư mục overlay cần cập nhật
+      - cd threads-infra/manifests/overlays/dev/haohan
+
+      # 4. Dùng kustomize để cập nhật image tag mới
+      - |
+        kustomize edit set image $IMAGE_REPO:latest=$IMAGE_REPO:1.0.0-${DRONE_COMMIT_SHA:0:7}
+
+      # 5. Quay lại thư mục gốc của repo
+      - cd ../../../
+
+      # 6. Add, commit và push thay đổi lên repo infra
+      - git add .
+      - 'git commit -m "ci: Update haohan image to tag 1.0.0-${DRONE_COMMIT_SHA:0:7}"'
+
+      - git remote set-url origin $REPO_URL
+      - git push origin main
+    depends_on:
+      - build-and-push-to-dockerhub
